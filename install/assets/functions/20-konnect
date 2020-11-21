@@ -1,0 +1,398 @@
+#!/usr/bin/with-contenv bash
+
+certificates() {
+    CA_NAME=${CA_NAME:-"kopano-selfsigned-ca"}
+    CA_SUBJECT=${CA_SUBJECT:-"/C=XX/ST=Kopano/L=Kopano/O=Kopano/CN="}
+    CA_CERT_SUBJECT=${CA_CERT_SUBJECT:-${CA_SUBJECT}${CA_NAME}}
+    CA_CERT_FILE=${CA_CERT_FILE:-"/certs/${CA_NAME}/${CA_NAME}.crt"}
+    CA_KEY_FILE=${CA_KEY_FILE:-"$(dirname "${CA_CERT_FILE}")/${CA_NAME}.key"}
+    CREATE_CA=${CREATE_CA:-"TRUE"}
+
+    certificates_create_certificate_authority() {
+        if [ ! -f "${CA_CERT_FILE}" ] ; then
+
+            print_debug "Certificates: Creating Self Signed Certificate Authority"
+            mkdir -p "$(dirname "${CA_CERT_FILE}")"
+            chown -R kopano:kopano "$(dirname "${CA_CERT_FILE}")"
+            sudo -u kopano echo "000a" > "$(dirname "${CA_CERT_FILE}")/serial"
+            sudo -u kopano touch "$(dirname "${CA_CERT_FILE}")/certindex"
+
+            silent eval "openssl req \
+                  -newkey rsa:4096 -keyout ${CA_KEY_FILE} \
+                  -x509 -days 3650 -nodes -out ${CA_CERT_FILE} \
+                  -subj \"${CA_CERT_SUBJECT}\""
+
+            chown -R kopano:kopano "${CA_KEY_FILE}" "${CA_CERT_FILE}"
+
+            sudo -u kopano cat > "$(dirname "${CA_CERT_FILE}")"/"${CA_NAME}".conf << EOF
+            [ ca ]
+            default_ca = $CA_NAME
+
+            [ $CA_NAME ]
+            unique_subject = no
+            new_certs_dir = .
+            certificate = ${CA_CERT_FILE}
+            database = $(dirname "${CA_CERT_FILE}")/certindex
+            private_key = ${CA_KEY_FILE}
+            serial = $(dirname "${CA_CERT_FILE}")/serial
+            default_days = 3650
+            default_md = sha256
+            policy = ${CA_NAME}_policy
+            x509_extensions = ${CA_NAME}_extensions
+
+            [ ${CA_NAME}_policy ]
+            commonName = supplied
+            stateOrProvinceName = supplied
+            countryName = supplied
+            emailAddress = optional
+            organizationName = supplied
+            organizationalUnitName = optional
+
+            [ ${CA_NAME}_extensions ]
+            basicConstraints = CA:false
+            subjectKeyIdentifier = hash
+            authorityKeyIdentifier = keyid:always
+            keyUsage = digitalSignature,keyEncipherment
+            extendedKeyUsage = serverAuth,clientAuth
+
+            [ req ]
+            default_bits = 2048
+            string_mask = utf8only
+            default_md = sha256
+            x509_extensions = v3_ca
+
+            [default_conf]
+            ssl_conf = ssl_sect
+
+            [ssl_sect]
+            system_default = system_default_sect
+
+            [system_default_sect]
+            MinProtocol = TLSv1.1
+            MaxProtocol = TLSv1.2
+            CipherString = DEFAULT
+EOF
+        else
+            print_debug "Certificates: CA Already Exists"
+        fi
+    }
+
+    certificates_create_certificate() {
+        if [ "$1" != "" ] ; then
+
+            if var_true "$CREATE_CA" ; then
+                if [ ! -f "${CA_CERT_FILE}" ] || [ ! -f "${CA_KEY_FILE}" ] ; then
+                    print_debug "Certificates: No CA Found - Creating before generating certificates"
+                    certificates_create_certificate_authority
+                fi
+            fi
+            CERT_SUBJECT="${CA_SUBJECT}$(basename "${1%%.*}")"
+
+            if var_true "$CREATE_CA" ; then
+                if [ ! -f "${1%%.*}".key ] ; then
+                    print_debug "Certificates: Creating Certificate: ${1}"
+                    silent eval "openssl req \
+                          -newkey rsa:2048 -keyout ${1%%.*}.key \
+                          -nodes -out ${1%%.*}.csr \
+                          -subj \"${CERT_SUBJECT}\" \
+                          -addext \"subjectAltName = DNS:localhost\""
+                    chown -R kopano:kopano "${1%%.*}".key "${1%%.*}".csr
+                fi
+            else
+                if [ ! -f "${1%%.*}".key ] ; then
+                    print_debug "Certificates: Creating Certificate: ${1}"
+                    silent eval "openssl req \
+                          -new -x509 -nodes -days 3650
+                          -config /usr/lib/ssl/openssl.cnf
+                          -out ${1%%.*}.crt \
+                          -keyout ${1%%.*}.key"
+                    chown -R kopano:kopano "${1%%.*}".key "${1%%.*}".crt
+                fi
+            fi
+
+            if var_true "$CREATE_CA" ; then
+                if [ ! -f "${1%%.*}".cert ] ; then
+                    print_debug "Certificates: Signing Certificate: ${1}"
+                    silent eval "openssl ca -batch -config $(dirname "${CA_CERT_FILE}")/${CA_NAME}.conf -notext -in ${1%%.*}.csr -out ${1%%.*}.crt"
+                    chown -R kopano:kopano "${1%%.*}".crt
+                    rm -rf "$(tail -n 1 "$(dirname "${CA_CERT_FILE}")"/certindex | awk '{print $3}')".pem
+                    rm -rf "${1%%.*}".csr
+                fi
+            fi
+
+            if [ -f "${1%%.*}".crt ] && [ -f "${1%%.*}".key ] ; then
+                print_debug "Certificates: Merging Certificate and Key for: ${1}"
+                sudo -u kopano cat "${1%%.*}".crt "${1%%.*}".key > "${1%%.*}".pem
+                chown -R kopano:kopano "${1%%.*}".pem
+            fi
+
+            if [ ! -f "${SERVER_SSL_PUBLIC_PATH}""$(basename "${1%%.*}")"-public.pem ] ; then
+                print_debug "Certificates: Creating Public Key for: ${1}"
+                mkdir -p "${SERVER_SSL_PUBLIC_PATH}"
+                chown -R kopano:kopano "${SERVER_SSL_PUBLIC_PATH}"
+                silent openssl x509 -in "${1%%.*}".crt -out "${SERVER_SSL_PUBLIC_PATH}""$(basename "${1%%.*}")"-public.pem -pubkey
+                chown -R kopano:kopano "${SERVER_SSL_PUBLIC_PATH}""$(basename "${1%%.*}")"-public.pem
+            fi
+        fi
+    }
+
+    certificates_check_permissions() {
+        if sudo -u kopano [ ! -r "${1}" ] ; then
+            print_debug "Certificates: Setting Read Permissions on ${1}"
+            chmod 444 "${1}"
+        fi
+    }
+
+    certificates_check_certificates() {
+        print_debug "Certificates: Checking Existence of ${1}"
+        if [ ! -f "${1}" ] ; then
+                mkdir -p "$(dirname "${1}")"
+                chown -R kopano:kopano "$(dirname "${1}")"
+                certificates_create_certificate "${1}"
+        fi
+    }
+
+    certificates_trust_ca() {
+        if var_true "$CREATE_CA" ; then
+            if [ -f "${CA_CERT_FILE}" ]; then
+                if [ ! -L /usr/local/share/ca-certificates/"$(basename "${CA_CERT_FILE}")" ] ; then
+                    print_debug "Certificates: Trusting CA ${CA_NAME}"
+                    ln -sf "${CA_CERT_FILE}" /usr/local/share/ca-certificates/
+                    silent dpkg-reconfigure ca-certificates
+                fi
+            fi
+        fi
+    }
+
+    case "$1" in
+        *)
+            certificates_check_certificates "${1}"
+            certificates_check_permissions "${1}"
+            certificates_trust_ca
+        ;;
+    esac
+}
+
+
+configure_logging() {
+    if var_true "$create_log_kopano" ; then
+        if [ ! -f "/tmp/state/.log.kopano" ] ; then
+            print_debug "Logging: Configuring Kopano"
+            if [ "${LOG_TYPE}" = "FILE" ] || [ "${LOG_TYPE}" = "file" ] ; then
+                print_debug "Logging: Kopano set to ${LOG_TYPE}"
+                mkdir -p "${LOG_PATH_KOPANO}"
+                chown -R kopano: "${LOG_PATH_KOPANO}"
+                sed -i -e "s#<KOPANO_LOG_LOCATION>#${LOG_PATH_KOPANO}#g" /etc/logrotate.d/kopano
+            else
+                rm -rf /etc/logrotate.d/kopano
+            fi
+            touch /tmp/state/.log.kopano
+        fi
+    else
+        rm -rf /etc/logrotate.d/kopano
+    fi
+
+    if [ ! -f "/tmp/state/.log.zpush" ] ; then
+        if var_true "$ENABLE_ZPUSH" ; then
+            print_debug "Logging: Configuring Z-Push"
+            if [ "${LOG_TYPE}" = "FILE" ] || [ "${LOG_TYPE}" = "file" ] ; then
+                print_debug "Logging: Z-Push set to ${LOG_TYPE}"
+                mkdir -p "${LOG_PATH_ZPUSH}"
+                chown -R "${NGINX_USER}":"${NGINX_GROUP}" "${LOG_PATH_ZPUSH}"
+                sed -i -e "s#<ZPUSH_LOG_LOCATION>#${LOG_PATH_ZPUSH}#g" /etc/logrotate.d/zpush
+            else
+                rm -rf /etc/logrotate.d/zpush
+            fi
+            touch /tmp/state/.log.zpush
+        else
+            rm -rf /etc/logrotate.d/zpush
+        fi
+    fi
+
+    ### Translate Logging
+    case "$LOG_LEVEL" in
+        "NONE" | "none" | "disabled" | "0" )
+            LOG_LEVEL=0
+            LOG_FILE="/dev/null"
+        ;;
+        "CRITICAL" | "critical" | "crit" | "1" )
+            LOG_LEVEL=1
+            konnect_log_level="fatal"
+        ;;
+        "ERROR" | "error" | "err" | "2" )
+            LOG_LEVEL=2
+            konnect_log_level="error"
+        ;;
+        "WARN" | "warn" | "3" )
+            LOG_LEVEL=3
+            konnect_log_level="warn"
+        ;;
+        "NOTICE" | "notice" | "4" )
+            LOG_LEVEL=4
+            konnect_log_level="info"
+        ;;
+        "INFO" | "info" | "5" )
+            LOG_LEVEL=5
+            konnect_log_level="info"
+                    ;;
+        "DEBUG" | "debug" | "6" )
+            LOG_LEVEL=6
+            konnect_log_level="debug"
+        ;;
+    esac
+
+    truefalse_yesno LOG_TIMESTAMPS
+}
+
+configure_konnect() {
+    if [ "$SETUP_TYPE" = "AUTO" ]; then
+        print_notice "Konnect: Auto Configuring"
+
+        mkdir -p "${KONNECT_VALIDATION_KEYS_PATH}"
+
+        case "$KONNECT_BACKEND" in
+            "KC" | "kc" | "KOPANO" | "kopano" )
+                konnect_backend="kc"
+            ;;
+            "LDAP" | "ldap" )
+                source /assets/defaults/ldap
+                konnect_backend="ldap"
+                konnect_backend_ldap=$(cat<<EOF
+ldap_basedn = ${LDAP_BASE_DN}
+ldap_binddn = ${LDAP_BIND_DN}
+ldap_bindpw = ${LDAP_BIND_PASS}
+ldap_filter = ${LDAP_FILTER_KONNECT}
+ldap_login_attribute = ${LDAP_ATTRIBUTE_LOGINNAME}
+ldap_scope = ${LDAP_SCOPE}
+ldap_uri = ${LDAP_URI}
+ldap_uuid_attribute = ${LDAP_ATTRIBUTE_USER_UNIQUE}
+EOF
+                                    )
+            ;;
+        esac
+
+        if [ ! -f "${KONNECT_SIGNING_KEY_FILE}" ]; then
+            print_debug "Konnect: No Signing Key File - Generating"
+            mkdir -p "$(dirname "${KONNECT_SIGNING_KEY_FILE}")"
+            silent openssl genpkey   -algorithm RSA \
+                                        -out "${KONNECT_SIGNING_KEY_FILE}" \
+                                        -pkeyopt rsa_keygen_bits:4096
+            silent openssl genpkey -algorithm RSA -out "${KONNECT_SIGNING_KEY_FILE}" -pkeyopt rsa_keygen_bits:4096 -pkeyopt rsa_keygen_pubexp:65537
+        fi
+
+        if [ ! -f "${KONNECT_SIGNING_SECRET_FILE}" ]; then
+            print_debug "Konnect: No Signing Encryption Secret Key File - Generating"
+            mkdir -p "$(dirname "${KONNECT_SIGNING_SECRET_FILE}")"
+            silent openssl rand -out "${KONNECT_SIGNING_SECRET_FILE}" 32
+        fi
+
+        if [ -f "${CONFIG_PATH}""${KONNECT_CONFIG_FILE_IDENTIFIER_REGISTRATION}" ] ; then
+            konnect_registration_identifier_conf=$(cat<<EOF
+identifier_registration_conf = ${CONFIG_PATH}${KONNECT_CONFIG_FILE_IDENTIFIER_REGISTRATION}
+EOF
+            )
+        fi
+
+        if [ -n "${KONNECT_SIGNING_KID}" ] ; then
+            konnect_signing_kid=$(cat<<EOF
+signing_kid = ${KONNECT_SIGNING_KID}
+EOF
+            )
+        fi
+
+        if [ -n "${KONNECT_ALLOWED_SCOPES}" ] ; then
+            konnect_allowed_scopes=$(cat<<EOF
+allowed_scopes = ${KONNECT_ALLOWED_SCOPES}
+EOF
+            )
+        fi
+
+        if [ -n "${KONNECT_TRUSTED_PROXIES}" ] ; then
+            konnect_trusted_proxies=$(cat<<EOF
+trusted_proxies = ${KONNECT_TRUSTED_PROXIES}
+EOF
+            )
+        fi
+
+        truefalse_yesno KONNECT_DISABLE_TLS_VALIDATION
+        truefalse_yesno KONNECT_ENABLE_CLIENT_DYNAMIC_REGISTRATION
+        truefalse_yesno KONNECT_ENABLE_CLIENT_GUESTS
+
+        cat <<EOF > "${CONFIG_PATH}""${KONNECT_CONFIG_FILE}"
+# Custom Generated Konnect Server Configuration! Do not edit, instead set ENV Vars
+# If you want to use your own configuration files set SETUP_TYPE=MANUAL when starting container
+# Last Generated on $(date)
+
+allow_client_guests = ${KONNECT_ENABLE_CLIENT_GUESTS}
+allow_dynamic_client_registration = ${KONNECT_ENABLE_CLIENT_DYNAMIC_REGISTRATION}
+encryption_secret_key = ${KONNECT_SIGNING_SECRET_FILE}
+identifier_scopes_conf = ${CONFIG_PATH}${KONNECT_CONFIG_FILE_IDENTIFIER_SCOPES}
+identity_manager = ${konnect_backend}
+identity_manager_args = ${KONNECT_IDENTITY_MANAGER_ARGUMENTS}
+insecure = ${KONNECT_DISABLE_TLS_VALIDATION}
+kc_server_uri = ${KONNECT_SOCKET_SERVER}
+kc_session_timeout = ${KONNECT_TIMEOUT_SESSION_KOPANO}
+listen = ${KONNECT_LISTEN_HOST}:${KONNECT_LISTEN_PORT}
+log_level = ${konnect_log_level}
+oidc_issuer_identifier = https://${KONNECT_HOSTNAME}
+signing_method = ${KONNECT_JWT_METHOD}
+signing_private_key = ${KONNECT_SIGNING_KEY_FILE}
+validation_keys_path = ${KONNECT_VALIDATION_KEYS_PATH}
+web_resources_path = ${KONNECT_WEBROOT}
+${konnect_backend_ldap}
+${konnect_allowed_scopes}
+${konnect_registration_identifier_conf}
+${konnect_signing_kid}
+${konnect_trusted_proxies}
+
+EOF
+
+        if [ ! -f "${CONFIG_PATH}/konnectd-identifier-scopes.yaml" ] ; then
+            cp -R /assets/kopano/config/konnect/scopes.yaml.in "${CONFIG_PATH}/konnectd-identifier-scopes.yaml"
+        fi
+
+    else
+        print_info "Konnect: Skipping Auto Configuration"
+    fi
+}
+
+parse_config() {
+    if [ -f "${1}" ] ; then
+        print_debug "Parsing Config ${1}"
+        while IFS="" read -r line || [ -n "$line" ]
+            do
+            if [[ "${line}" == *" = "* ]] ; then
+                name=$(echo "$line" | awk '{print $1}')
+                value=$(echo "$line" | awk '{print $3}')
+                export "$name"="$value"
+            fi
+        done < "${1}"
+    else
+        print_error "Tried to parse config ${1} but it doesn't exist!"
+    fi
+}
+
+
+wait_for_server() {
+
+    case "${1}" in
+            "KONNECT" | "konnect" | "KONNECT_SOCKET_SERVER" )
+                socket_server=${KONNECT_SOCKET_SERVER}
+            ;;
+    esac
+
+    socket_server=${socket_server:-"${SOCKET_SERVER}"}
+
+    case "${socket_server}" in
+            "file://"* )
+                print_notice "Checking to see if Kopano Server socket is avaialable"
+                wait_for_socket "${socket_Server}"
+            ;;
+            "htt"* )
+                print_notice "Checking to see if Kopano Server port is avaialable"
+                kchost=$(echo "${socket_server}" | awk -F / '{print $3}' | awk -F : '{print $1}')
+                kcport=$(echo "${socket_server}" | awk -F / '{print $3}' | awk -F : '{print $2}')
+                wait_for_port "$kchost" "$kcport"
+            ;;
+    esac
+}

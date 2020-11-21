@@ -1,0 +1,36 @@
+version: '3.7'
+services:
+
+  konnect-app:
+    image: tiredofit/konnect:latest
+    container_name: konnect-app
+    labels: 
+      - traefik.enable=true
+      - traefik.http.routers.konnect-app.rule=Host(`konnect.example.com)` 
+      - traefik.http.services.konnect-app.loadbalancer.server.port=80    
+    volumes:
+      - ./logs/konnect:/logs
+      - ./config:/config
+      - ./certs:/certs
+      - ./assets/custom:/assets/custom
+    environment:
+      - TIMEZONE=America/Vancouver
+      - CONTAINER_LOG_LEVEL=INFO
+      - DEBUG_MODE=FALSE
+      - LOG_LEVEL=INFO
+
+     ### Nginx
+      - NGINX_FASTCGI_BUFFERS=32 32k
+      - NGINX_FASTCGI_BUFFER_SIZE=64k
+ 
+      - KONNECT_HOSTNAME=konnect.example.com
+    networks:
+      - proxy
+      - services
+    restart: always
+
+networks:
+  proxy:
+    external: true
+  services:
+    external: true
