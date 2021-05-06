@@ -1,10 +1,10 @@
-FROM tiredofit/alpine:3.12 as konnect-builder
+FROM tiredofit/alpine:3.13 as konnect-builder
 
 ARG KONNECT_REPO_URL
 ARG KONNECT_VERSION
 
 ENV KONNECT_REPO_URL=${KONNECT_REPO_URL:-"https://github.com/Kopano-dev/konnect"} \
-    KONNECT_VERSION=${KONNECT_VERSION:-"v0.33.10"}
+    KONNECT_VERSION=${KONNECT_VERSION:-"v0.34.0"}
 
 #ADD build-assets/kopano-konnect /build-assets
 
@@ -54,7 +54,7 @@ RUN set -x && \
     rm -rf /var/cache/apk/* && \
     rm -rf /rootfs
 
-FROM tiredofit/nginx:latest
+FROM tiredofit/nginx:alpine-3.13
 LABEL maintainer="Dave Conroy (dave at tiredofit dot ca)"
 
 ENV ENABLE_SMTP=FALSE \
