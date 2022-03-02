@@ -1,4 +1,4 @@
-FROM tiredofit/alpine:3.13 as konnect-builder
+FROM docker.io/tiredofit/alpine:3.13 as konnect-builder
 
 ARG KONNECT_REPO_URL
 ARG KONNECT_VERSION
@@ -54,16 +54,16 @@ RUN set -x && \
     rm -rf /var/cache/apk/* && \
     rm -rf /rootfs
 
-FROM tiredofit/nginx:alpine-3.13
-LABEL maintainer="Dave Conroy (dave at tiredofit dot ca)"
+FROM docker.io/tiredofit/nginx:alpine-3.13
+LABEL maintainer="Dave Conroy (github.com/tiredofit)"
 
-ENV ENABLE_SMTP=FALSE \
+ENV CONTAINER_ENABLE_MESSAGING=FALSE \
     NGINX_ENABLE_CREATE_SAMPLE_HTML=FALSE \
     NGINX_LOG_ACCESS_LOCATION=/logs/nginx \
     NGINX_LOG_ERROR_LOCATION=/logs/nginx \
     NGINX_MODE=PROXY \
     NGINX_PROXY_URL=http://localhost:8777 \
-    ZABBIX_HOSTNAME=konnect-app
+    CONTAINER_NAME=konnect-app
 
 ### Move Previously built files from builder image
 COPY --from=konnect-builder /*.tar.gz /usr/src/konnect/

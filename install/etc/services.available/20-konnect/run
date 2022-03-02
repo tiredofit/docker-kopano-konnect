@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bash
+#!/command/with-contenv bash
 
 source /assets/functions/00-container
 prepare_service both
@@ -190,7 +190,7 @@ fi
 
 set -- --identifier-client-path="$web_resources_path/identifier-webapp" --identifier-registration-conf="$identifier_registration_conf" --iss="$oidc_issuer_identifier" "$@" "$identity_manager" "$identity_manager_args"
 
-print_info "Starting Konnect Service"
+print_start "Starting Konnect Service"
 if [ "${LOG_TYPE}" = "FILE" ] || [ "${LOG_TYPE}" = "file" ] ; then
 	if [ "${LOG_FILE_KONNECT}" = "/dev/null" ] ; then unset "${LOG_PATH}" ; fi;
 	/usr/libexec/kopano/konnectd serve "$@" 2>> "${LOG_PATH}""${LOG_FILE}"

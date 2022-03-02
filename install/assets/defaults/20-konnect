@@ -1,4 +1,4 @@
-#!/usr/bin/with-contenv bash
+#!/command/with-contenv bash
 
 CONFIG_PATH=${CONFIG_PATH:-"/config/"}
 LOG_FILE=${LOG_FILE:-"konnect.log"}
@@ -12,7 +12,7 @@ SERVER_LISTEN_PORT=${SERVER_LISTEN_PORT_:-236}
 SERVER_LISTEN_PORT_SECURE=${SERVER_LISTEN_PORT_SECURE:-237}
 SETUP_TYPE=${SETUP_TYPE:-"AUTO"}
 
-#!/usr/bin/with-contenv bash
+#!/command/with-contenv bash
 
 KONNECT_BACKEND=${KONNECT_BACKEND:-"KC"}
 KONNECT_CONFIG_FILE=${KONNECT_CONFIG_FILE:-"konnectd.cfg"}
